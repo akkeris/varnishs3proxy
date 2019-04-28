@@ -1,0 +1,61 @@
+#
+# Varnish AWS S3 Gateway VCL
+#
+# Allows global read (GET, HEAD) and ACL protected writes (POST, PUT, DELETE).
+# When writing, pass in Content-Type and Content-MD5, both are optional.
+#
+# Params:
+#
+# %BUCKET% - S3 bucket name, S3 host may be regional
+# %ACCESS_ID% - IAM access ID for bucket
+# %SECRET_KEY% - IAM secret key for access ID
+#
+
+vcl 4.0;
+
+import digest;
+
+backend default
+{
+  .host = "${S3_BUCKET}.s3-${S3_REGION}.amazonaws.com";
+  .port = "80";
+}
+
+acl s3_write
+{
+  "127.0.0.1";
+}
+
+sub vcl_recv
+{
+  if(req.method != "GET" && req.method != "HEAD" &&
+     client.ip !~ s3_write)
+  {
+    return(synth(403, "Access denied"));
+  }
+}
+
+sub vcl_backend_fetch
+{
+  set bereq.http.Host = "${S3_BUCKET}.s3-${S3_REGION}.amazonaws.com";
+  set bereq.http.Date = now;
+
+  set bereq.http.NL = {"
+"};
+
+ set bereq.http.Authorization = "AWS " + "${S3_ACCESS_KEY}" + ":" +
+    digest.base64_hex(digest.hmac_sha1("${S3_SECRET_KEY}",
+      bereq.method + bereq.http.NL +
+      bereq.http.Content-MD5 + bereq.http.NL +
+      bereq.http.Content-Type + bereq.http.NL +
+      bereq.http.Date + bereq.http.NL + 
+      "/" + "${S3_BUCKET}" + bereq.url)
+    );
+  unset bereq.http.NL;
+}
+
+sub vcl_deliver
+{
+  set resp.http.Server = "Varnish AWS S3 Gateway";
+}
+
